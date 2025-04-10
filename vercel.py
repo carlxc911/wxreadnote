@@ -45,14 +45,15 @@ except Exception as e:
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB限制
 
-# 尝试导入Excel导出功能所需的库
+# 检查openpyxl是否可用（不使用pandas）
 try:
-    import pandas as pd
-    has_pandas = True
-    logger.info("Successfully imported pandas")
+    import openpyxl
+    from openpyxl import Workbook
+    has_excel_support = True
+    logger.info("Successfully imported openpyxl")
 except ImportError:
-    has_pandas = False
-    logger.warning("Pandas not available, Excel export will be disabled")
+    has_excel_support = False
+    logger.warning("openpyxl not available, Excel export will be disabled")
 
 # 从notebook_v1.py中提取的必要函数，移除pandas依赖
 def parse_cookie_string(cookie_string):
@@ -133,16 +134,25 @@ def export_to_json(books_data, output_file):
     return True
 
 def export_to_excel(books_data, output_file):
-    """导出为Excel格式"""
-    if not has_pandas:
-        logger.warning("Pandas not available, cannot export to Excel")
+    """导出为Excel格式，仅使用openpyxl，不依赖pandas"""
+    if not has_excel_support:
+        logger.warning("openpyxl not available, cannot export to Excel")
         return False
     
     try:
-        # 创建一个空的DataFrame列表
-        all_notes_df = []
+        # 创建一个新的工作簿
+        wb = Workbook()
+        ws = wb.active
+        ws.title = "微信读书笔记"
         
-        # 遍历所有书籍
+        # 添加表头
+        headers = ['书名', '作者', 'ISBN', '评分', '类型', '章节', '创建时间', '内容']
+        for col_num, header in enumerate(headers, 1):
+            cell = ws.cell(row=1, column=col_num)
+            cell.value = header
+        
+        # 添加所有笔记数据
+        row_num = 2
         for book_data in books_data:
             book_info = book_data.get('book_info', {})
             book_title = book_info.get('title', '未知书名')
@@ -161,28 +171,28 @@ def export_to_excel(books_data, output_file):
                 created_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(note.get('createTime', 0)))
                 content = note.get('markText', '') or note.get('content', '')
                 
-                # 添加到DataFrame
-                note_dict = {
-                    '书名': book_title,
-                    '作者': book_author,
-                    'ISBN': isbn,
-                    '评分': rating,
-                    '类型': note_type,
-                    '章节': chapter,
-                    '创建时间': created_time,
-                    '内容': content
-                }
-                all_notes_df.append(note_dict)
+                # 写入每一列
+                col_num = 1
+                for value in [book_title, book_author, isbn, rating, note_type, chapter, created_time, content]:
+                    cell = ws.cell(row=row_num, column=col_num)
+                    cell.value = value
+                    col_num += 1
+                
+                row_num += 1
         
-        # 创建DataFrame并导出
-        if all_notes_df:
-            df = pd.DataFrame(all_notes_df)
-            df.to_excel(output_file, index=False)
-            logger.info(f"Excel exported successfully: {output_file}")
-            return True
-        else:
-            logger.warning("No notes to export")
-            return False
+        # 调整列宽以适应内容
+        for col_num, _ in enumerate(headers, 1):
+            col_letter = openpyxl.utils.get_column_letter(col_num)
+            if col_num < len(headers):
+                ws.column_dimensions[col_letter].width = 20
+            else:
+                # 内容列宽度设置得更大一些
+                ws.column_dimensions[col_letter].width = 50
+        
+        # 保存工作簿
+        wb.save(output_file)
+        logger.info(f"Excel exported successfully: {output_file}")
+        return True
     except Exception as e:
         logger.error(f"Error exporting to Excel: {str(e)}")
         logger.error(traceback.format_exc())
@@ -206,7 +216,7 @@ def status():
             'uploads': os.path.exists(UPLOAD_FOLDER),
             'outputs': os.path.exists(OUTPUT_DIR)
         },
-        'excel_support': has_pandas
+        'excel_support': has_excel_support
     })
 
 @app.route('/extract', methods=['POST'])
@@ -359,7 +369,7 @@ def extract():
             }
         }
         
-        if has_pandas:
+        if has_excel_support:
             try:
                 excel_file = os.path.join(temp_dir, f'weread_notes_{timestamp}.xlsx')
                 logger.info(f"Exporting data to Excel: {excel_file}")
