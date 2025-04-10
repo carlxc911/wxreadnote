@@ -232,5 +232,8 @@ def handle_connect():
 def handle_disconnect():
     print('Client disconnected')
 
+# 为Vercel部署添加WSGI应用入口点
+app = socketio.wsgi_app
+
 if __name__ == '__main__':
     socketio.run(app, debug=True) 
