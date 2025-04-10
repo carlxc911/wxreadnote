@@ -15,7 +15,7 @@ logging.basicConfig(
     format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
     stream=sys.stdout
 )
-logger = logging.getLogger(__name__)
+logger = logging.getLogger('vercel')
 
 # 记录环境信息
 logger.info(f"Starting Vercel-compatible application")
@@ -27,19 +27,32 @@ logger.info(f"Files in current directory: {os.listdir('.')}")
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'weread-exporter-secret-key!'
 
-# 配置文件夹
-UPLOAD_FOLDER = 'uploads'
-if not os.path.exists(UPLOAD_FOLDER):
-    os.makedirs(UPLOAD_FOLDER)
-    logger.info(f"Created upload folder: {UPLOAD_FOLDER}")
+# 在Vercel上使用/tmp目录，因为它是唯一可写的
+UPLOAD_FOLDER = '/tmp/uploads' if os.environ.get('VERCEL') == '1' else 'uploads'
+OUTPUT_DIR = '/tmp/outputs' if os.environ.get('VERCEL') == '1' else 'outputs'
 
-OUTPUT_DIR = 'outputs'
-if not os.path.exists(OUTPUT_DIR):
-    os.makedirs(OUTPUT_DIR)
-    logger.info(f"Created output folder: {OUTPUT_DIR}")
+try:
+    if not os.path.exists(UPLOAD_FOLDER):
+        os.makedirs(UPLOAD_FOLDER)
+        logger.info(f"Created upload folder: {UPLOAD_FOLDER}")
+
+    if not os.path.exists(OUTPUT_DIR):
+        os.makedirs(OUTPUT_DIR)
+        logger.info(f"Created output folder: {OUTPUT_DIR}")
+except Exception as e:
+    logger.error(f"Error creating directories: {str(e)}")
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 16MB限制
+
+# 尝试导入Excel导出功能所需的库
+try:
+    import pandas as pd
+    has_pandas = True
+    logger.info("Successfully imported pandas")
+except ImportError:
+    has_pandas = False
+    logger.warning("Pandas not available, Excel export will be disabled")
 
 # 从notebook_v1.py中提取的必要函数，移除pandas依赖
 def parse_cookie_string(cookie_string):
@@ -119,6 +132,62 @@ def export_to_json(books_data, output_file):
         json.dump(books_data, f, ensure_ascii=False, indent=4)
     return True
 
+def export_to_excel(books_data, output_file):
+    """导出为Excel格式"""
+    if not has_pandas:
+        logger.warning("Pandas not available, cannot export to Excel")
+        return False
+    
+    try:
+        # 创建一个空的DataFrame列表
+        all_notes_df = []
+        
+        # 遍历所有书籍
+        for book_data in books_data:
+            book_info = book_data.get('book_info', {})
+            book_title = book_info.get('title', '未知书名')
+            book_author = book_info.get('author', '未知作者')
+            isbn = book_data.get('isbn', '')
+            rating = book_data.get('rating', 0)
+            
+            notes = book_data.get('notes', [])
+            if not notes:
+                continue
+                
+            # 处理每条笔记
+            for note in notes:
+                note_type = '划线' if note.get('type') == 1 else '笔记'
+                chapter = note.get('chapter_title', '')
+                created_time = time.strftime('%Y-%m-%d %H:%M:%S', time.localtime(note.get('createTime', 0)))
+                content = note.get('markText', '') or note.get('content', '')
+                
+                # 添加到DataFrame
+                note_dict = {
+                    '书名': book_title,
+                    '作者': book_author,
+                    'ISBN': isbn,
+                    '评分': rating,
+                    '类型': note_type,
+                    '章节': chapter,
+                    '创建时间': created_time,
+                    '内容': content
+                }
+                all_notes_df.append(note_dict)
+        
+        # 创建DataFrame并导出
+        if all_notes_df:
+            df = pd.DataFrame(all_notes_df)
+            df.to_excel(output_file, index=False)
+            logger.info(f"Excel exported successfully: {output_file}")
+            return True
+        else:
+            logger.warning("No notes to export")
+            return False
+    except Exception as e:
+        logger.error(f"Error exporting to Excel: {str(e)}")
+        logger.error(traceback.format_exc())
+        return False
+
 @app.route('/')
 def index():
     logger.info("Serving index page")
@@ -131,12 +200,13 @@ def status():
     return jsonify({
         'status': 'ok',
         'version': '1.0.0 (Vercel)',
-        'environment': 'vercel',
+        'environment': 'vercel' if os.environ.get('VERCEL') == '1' else 'local',
         'python_version': sys.version,
         'directories': {
             'uploads': os.path.exists(UPLOAD_FOLDER),
             'outputs': os.path.exists(OUTPUT_DIR)
-        }
+        },
+        'excel_support': has_pandas
     })
 
 @app.route('/extract', methods=['POST'])
@@ -151,8 +221,12 @@ def extract():
             return jsonify({'status': 'error', 'message': '请输入有效的Cookie'}), 400
             
         # 创建临时目录用于存储导出文件
-        temp_dir = tempfile.mkdtemp(dir=OUTPUT_DIR)
-        logger.info(f"Created temp directory: {temp_dir}")
+        try:
+            temp_dir = tempfile.mkdtemp(dir=OUTPUT_DIR)
+            logger.info(f"Created temp directory: {temp_dir}")
+        except Exception as e:
+            logger.error(f"Error creating temp directory: {str(e)}")
+            temp_dir = OUTPUT_DIR
         
         # 获取用户的User-Agent
         user_agent = request.headers.get('User-Agent', '')
@@ -276,16 +350,32 @@ def extract():
         logger.info(f"Exporting data to JSON: {json_file}")
         export_to_json(all_books_data, json_file)
         
-        logger.info("Processing completed successfully")
-        
-        return jsonify({
+        # 尝试导出Excel
+        response_data = {
             'status': 'success', 
             'message': '数据导出成功',
             'files': {
                 'json': f'/download?file=weread_notes_{timestamp}.json&dir={os.path.basename(temp_dir)}'
-            },
-            'note': 'Vercel环境中仅支持JSON导出，完整功能请在本地运行'
-        })
+            }
+        }
+        
+        if has_pandas:
+            try:
+                excel_file = os.path.join(temp_dir, f'weread_notes_{timestamp}.xlsx')
+                logger.info(f"Exporting data to Excel: {excel_file}")
+                if export_to_excel(all_books_data, excel_file):
+                    response_data['files']['excel'] = f'/download?file=weread_notes_{timestamp}.xlsx&dir={os.path.basename(temp_dir)}'
+                    logger.info("Excel export successful")
+                else:
+                    logger.warning("Excel export failed")
+            except Exception as e:
+                logger.error(f"Error during Excel export: {str(e)}")
+        else:
+            response_data['note'] = '当前环境不支持Excel导出，仅提供JSON格式'
+            
+        logger.info("Processing completed successfully")
+        
+        return jsonify(response_data)
         
     except Exception as e:
         error_msg = traceback.format_exc()
