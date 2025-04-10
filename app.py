@@ -4,12 +4,13 @@ import json
 import tempfile
 import traceback
 from werkzeug.utils import secure_filename
-from flask_socketio import SocketIO, emit
 from notebook_v1 import parse_cookie_string, get_notebooklist, get_bookinfo, get_chapter_info, get_bookmark_list, get_review_list, export_to_excel, export_to_json
+
+# 检测是否在Vercel环境中运行
+is_vercel = os.environ.get('VERCEL', False)
 
 app = Flask(__name__)
 app.config['SECRET_KEY'] = 'weread-exporter-secret-key!'
-socketio = SocketIO(app, cors_allowed_origins="*")
 
 # 配置上传文件夹
 UPLOAD_FOLDER = 'uploads'
@@ -22,6 +23,28 @@ if not os.path.exists(OUTPUT_DIR):
 
 app.config['UPLOAD_FOLDER'] = UPLOAD_FOLDER
 app.config['MAX_CONTENT_LENGTH'] = 16 * 1024 * 1024  # 限制上传大小为16MB
+
+# 只在非Vercel环境中使用SocketIO
+if not is_vercel:
+    from flask_socketio import SocketIO, emit
+    socketio = SocketIO(app, cors_allowed_origins="*")
+else:
+    # 在Vercel环境中创建一个模拟的socketio对象
+    class MockSocketIO:
+        def __init__(self):
+            pass
+        
+        def emit(self, event, data, room=None):
+            pass
+        
+        def run(self, app, **kwargs):
+            pass
+        
+        @property
+        def wsgi_app(self):
+            return app.wsgi_app
+    
+    socketio = MockSocketIO()
 
 @app.route('/')
 def index():
@@ -56,25 +79,28 @@ def extract():
         try:
             weread_url = "https://weread.qq.com/"
             session.get(weread_url)
-            socketio.emit('progress_update', {'status': 'connecting', 'message': '正在连接微信读书...'}, room=sid)
+            if not is_vercel:
+                socketio.emit('progress_update', {'status': 'connecting', 'message': '正在连接微信读书...'}, room=sid)
         except Exception as e:
             return jsonify({'status': 'error', 'message': f'访问微信读书主页失败: {str(e)}'}), 500
         
         # 获取笔记本列表
-        socketio.emit('progress_update', {'status': 'fetching_books', 'message': '正在获取书籍列表...'}, room=sid)
+        if not is_vercel:
+            socketio.emit('progress_update', {'status': 'fetching_books', 'message': '正在获取书籍列表...'}, room=sid)
         books = get_notebooklist(session)
         if not books:
             return jsonify({'status': 'error', 'message': '获取书籍列表失败，请检查Cookie是否有效'}), 400
         
         # 发送总书籍数量
         total_books = len(books)
-        socketio.emit('progress_update', {
-            'status': 'start_processing',
-            'message': f'开始处理，共有 {total_books} 本书',
-            'total_books': total_books,
-            'current_book': 0,
-            'percent': 0
-        }, room=sid)
+        if not is_vercel:
+            socketio.emit('progress_update', {
+                'status': 'start_processing',
+                'message': f'开始处理，共有 {total_books} 本书',
+                'total_books': total_books,
+                'current_book': 0,
+                'percent': 0
+            }, room=sid)
         
         all_books_data = []
         
@@ -86,14 +112,15 @@ def extract():
             # 更新进度
             current_book = index + 1
             percent = int((current_book / total_books) * 100)
-            socketio.emit('progress_update', {
-                'status': 'processing',
-                'message': f'正在处理 ({current_book}/{total_books}): {title}',
-                'current_book': current_book,
-                'book_title': title,
-                'total_books': total_books,
-                'percent': percent
-            }, room=sid)
+            if not is_vercel:
+                socketio.emit('progress_update', {
+                    'status': 'processing',
+                    'message': f'正在处理 ({current_book}/{total_books}): {title}',
+                    'current_book': current_book,
+                    'book_title': title,
+                    'total_books': total_books,
+                    'percent': percent
+                }, room=sid)
             
             # 获取书籍详细信息
             isbn, rating, book_info = get_bookinfo(session, bookId)
@@ -113,16 +140,18 @@ def extract():
             all_notes = []
             if bookmark_list_huaxian:
                 all_notes.extend(bookmark_list_huaxian)
-                socketio.emit('progress_update', {
-                    'status': 'processing_detail',
-                    'message': f'《{title}》 - 获取到 {len(bookmark_list_huaxian)} 条划线'
-                }, room=sid)
+                if not is_vercel:
+                    socketio.emit('progress_update', {
+                        'status': 'processing_detail',
+                        'message': f'《{title}》 - 获取到 {len(bookmark_list_huaxian)} 条划线'
+                    }, room=sid)
             if reviews:
                 all_notes.extend(reviews)
-                socketio.emit('progress_update', {
-                    'status': 'processing_detail',
-                    'message': f'《{title}》 - 获取到 {len(reviews)} 条笔记'
-                }, room=sid)
+                if not is_vercel:
+                    socketio.emit('progress_update', {
+                        'status': 'processing_detail',
+                        'message': f'《{title}》 - 获取到 {len(reviews)} 条笔记'
+                    }, room=sid)
             
             # 排序
             if all_notes:
@@ -165,11 +194,12 @@ def extract():
             time.sleep(1)
         
         # 导出数据
-        socketio.emit('progress_update', {
-            'status': 'exporting',
-            'message': '正在导出数据...',
-            'percent': 95
-        }, room=sid)
+        if not is_vercel:
+            socketio.emit('progress_update', {
+                'status': 'exporting',
+                'message': '正在导出数据...',
+                'percent': 95
+            }, room=sid)
         
         timestamp = int(time.time())
         json_file = os.path.join(temp_dir, f'weread_notes_{timestamp}.json')
@@ -179,11 +209,12 @@ def extract():
         export_to_excel(all_books_data, excel_file)
         
         # 完成
-        socketio.emit('progress_update', {
-            'status': 'completed',
-            'message': '处理完成！',
-            'percent': 100
-        }, room=sid)
+        if not is_vercel:
+            socketio.emit('progress_update', {
+                'status': 'completed',
+                'message': '处理完成！',
+                'percent': 100
+            }, room=sid)
         
         return jsonify({
             'status': 'success', 
@@ -197,10 +228,11 @@ def extract():
     except Exception as e:
         error_msg = traceback.format_exc()
         if 'sid' in locals() and sid:
-            socketio.emit('progress_update', {
-                'status': 'error',
-                'message': f'处理出错: {str(e)}'
-            }, room=sid)
+            if not is_vercel:
+                socketio.emit('progress_update', {
+                    'status': 'error',
+                    'message': f'处理出错: {str(e)}'
+                }, room=sid)
         return jsonify({'status': 'error', 'message': f'处理过程中出错: {str(e)}', 'details': error_msg}), 500
 
 @app.route('/download')
@@ -233,7 +265,18 @@ def handle_disconnect():
     print('Client disconnected')
 
 # 为Vercel部署添加WSGI应用入口点
-app = socketio.wsgi_app
+if is_vercel:
+    # 在Vercel上，直接使用Flask的WSGI应用
+    application = app
+else:
+    # 在非Vercel环境下，使用SocketIO的WSGI应用
+    application = socketio.wsgi_app
+
+# 导出app对象供Vercel使用
+app = application
 
 if __name__ == '__main__':
-    socketio.run(app, debug=True) 
+    if not is_vercel:
+        socketio.run(app, debug=True)
+    else:
+        app.run(debug=True) 
