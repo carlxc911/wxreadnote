@@ -1,0 +1,103 @@
+body {
+    background-color: #f8f9fa;
+}
+
+.card {
+    box-shadow: 0 4px 6px rgba(0, 0, 0, 0.1);
+}
+
+.footer {
+    margin-top: 5rem;
+    position: relative;
+    bottom: 0;
+    width: 100%;
+}
+
+.form-control:focus {
+    border-color: #80bdff;
+    box-shadow: 0 0 0 0.25rem rgba(0, 123, 255, 0.25);
+}
+
+.btn-primary {
+    background-color: #1a73e8;
+    border-color: #1a73e8;
+}
+
+.btn-primary:hover {
+    background-color: #0d62cb;
+    border-color: #0d62cb;
+}
+
+#progressArea {
+    margin: 2rem 0;
+}
+
+.progress {
+    height: 1.5rem;
+    border-radius: 0.5rem;
+}
+
+/* 进度详情样式 */
+#detailProgressCard {
+    margin-top: 1.5rem;
+    border-radius: 0.5rem;
+}
+
+#detailProgressCard .card-header {
+    background-color: #f8f9fa;
+    font-weight: 500;
+}
+
+.current-book-info {
+    background-color: #f8f9fb;
+}
+
+.log-container {
+    background-color: #f8f9fa;
+    transition: all 0.3s ease;
+}
+
+.log-item {
+    padding: 0.25rem 0;
+    border-bottom: 1px dashed #e9ecef;
+    color: #495057;
+    font-family: Consolas, Monaco, 'Courier New', monospace;
+    font-size: 0.875rem;
+}
+
+.log-item:last-child {
+    border-bottom: none;
+}
+
+#bookCounter {
+    font-weight: bold;
+    color: #1a73e8;
+    background-color: #e8f0fe;
+    padding: 0.25rem 0.5rem;
+    border-radius: 1rem;
+    font-size: 0.875rem;
+}
+
+#currentBookTitle {
+    font-weight: 500;
+    color: #1a73e8;
+}
+
+/* 进度条动画 */
+@keyframes progress-animation {
+    0% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+.progress-bar {
+    background: linear-gradient(45deg, #1a73e8, #34a853, #fbbc05, #ea4335);
+    background-size: 300% 300%;
+    animation: progress-animation 3s ease infinite;
+} 
