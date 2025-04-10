@@ -252,7 +252,7 @@ def extract():
         try:
             weread_url = "https://weread.qq.com/"
             logger.info(f"Accessing weread URL: {weread_url}")
-            response = session.get(weread_url)
+            response = session.get(weread_url, timeout=5)
             logger.info(f"Weread response status: {response.status_code}")
         except Exception as e:
             logger.error(f"Failed to access weread: {str(e)}")
@@ -271,12 +271,23 @@ def extract():
             logger.error(f"Error fetching notebook list: {str(e)}")
             return jsonify({'status': 'error', 'message': f'获取书籍列表失败: {str(e)}'}), 500
         
+        # 限制处理的书籍数量以避免超时
+        max_books = 15  # 限制每次处理的最大书籍数量
+        if len(books) > max_books and os.environ.get('VERCEL') == '1':
+            logger.warning(f"Too many books ({len(books)}), limiting to {max_books} to avoid timeout")
+            books = books[:max_books]
+            
         # 发送总书籍数量
         total_books = len(books)
         all_books_data = []
         
         for index, book_item in enumerate(books):
             try:
+                # 检查是否运行在Vercel环境，如果是，则检查是否快要超时
+                if os.environ.get('VERCEL') == '1' and time.time() - request.environ.get('FLASK_REQUEST_START_TIME', time.time()) > 8:
+                    logger.warning("Request is about to timeout, stopping processing")
+                    break
+                    
                 book = book_item.get('book')
                 bookId = book.get('bookId')
                 title = book.get('title', '未知书名')
@@ -345,8 +356,8 @@ def extract():
                 
                 all_books_data.append(book_data)
                 
-                # 每处理一本书睡眠1秒，避免请求过快
-                time.sleep(1)
+                # 每处理一本书睡眠很短时间，避免请求过快但不会明显延长总处理时间
+                time.sleep(0.2)
             except Exception as e:
                 logger.error(f"Error processing book '{title}': {str(e)}")
                 logger.error(traceback.format_exc())
@@ -383,7 +394,14 @@ def extract():
         else:
             response_data['note'] = '当前环境不支持Excel导出，仅提供JSON格式'
             
-        logger.info("Processing completed successfully")
+        # 添加处理信息
+        if len(books) > len(all_books_data):
+            if os.environ.get('VERCEL') == '1':
+                response_data['warning'] = f'由于Vercel环境限制，仅处理了{len(all_books_data)}本书中的{len(all_books_data)}本。建议在本地环境运行以获取所有数据。'
+            else:
+                response_data['warning'] = f'仅处理了{len(books)}本书中的{len(all_books_data)}本，有些书籍处理失败。'
+        
+        logger.info(f"Processing completed successfully - processed {len(all_books_data)} of {len(books)} books")
         
         return jsonify(response_data)
         
@@ -417,6 +435,11 @@ def download():
         return jsonify({'status': 'error', 'message': '文件不存在'}), 404
     
     return send_file(file_path, as_attachment=True)
+
+# 记录请求开始时间以便计算超时
+@app.before_request
+def before_request():
+    request.environ['FLASK_REQUEST_START_TIME'] = time.time()
 
 # 导出app对象供Vercel使用
 application = app

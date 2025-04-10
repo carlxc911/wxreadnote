@@ -339,7 +339,8 @@ if is_vercel:
 else:
     # 在非Vercel环境下，使用SocketIO的WSGI应用
     if socketio:
-        application = socketio.wsgi_app
+        # 修正API调用
+        application = socketio
     else:
         application = app
 
