@@ -39,6 +39,9 @@ uploads/
 *.csv
 cookie.txt
 
+# 排除特定的json文件
+!vercel.json
+
 # OS specific
 .DS_Store
 Thumbs.db 
